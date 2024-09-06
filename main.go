@@ -16,6 +16,8 @@ var templateFS embed.FS
 func main() {
 	router := mux.NewRouter()
 
+	router.HandleFunc("/ws", handleWebSocket)
+
 	// Define routes
 	router.HandleFunc("/", homeHandler)
 	router.HandleFunc("/about", aboutHandler)
