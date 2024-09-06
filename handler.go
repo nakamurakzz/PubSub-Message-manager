@@ -10,7 +10,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"time"
+	"sync"
 
 	"cloud.google.com/go/pubsub"
 	"github.com/gorilla/websocket"
@@ -19,12 +19,13 @@ import (
 
 var (
 	topicList     map[string]string = make(map[string]string)
-	topic         string
-	hasSubscribed bool = false
+	subCancel     context.CancelFunc
+	subMutex      sync.Mutex
+	wsConnections []*websocket.Conn
+	wsConnMutex   sync.Mutex
 )
 
 func messageHandler(w http.ResponseWriter, r *http.Request) {
-	log.Println("homeHandler")
 	// Load the template
 	tmpl, err := template.ParseFS(templateFS, "templates/*.html")
 	if err != nil {
@@ -44,7 +45,6 @@ func messageHandler(w http.ResponseWriter, r *http.Request) {
 
 	it := client.Subscriptions(ctx)
 	for {
-		log.Println("topicList")
 		sub, err := it.Next()
 		if err == iterator.Done {
 			break
@@ -79,13 +79,28 @@ func messageHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func subscribeHandler(w http.ResponseWriter, r *http.Request) {
-	log.Println("subscribeHandler")
-	topic = r.FormValue("topic")
-	log.Printf("Topic: %s", topic)
+	newTopic := r.FormValue("topic")
+	log.Printf("New Topic: %s", newTopic)
 
-	// return success
+	subMutex.Lock()
+	defer subMutex.Unlock()
+
+	// 既存のサブスクリプションをキャンセル
+	if subCancel != nil {
+		subCancel()
+		subCancel = nil
+	}
+
+	// 新しいサブスクリプションのためのコンテキストを作成
+	ctx, cancel := context.WithCancel(context.Background())
+	subCancel = cancel
+
+	// 新しいサブスクリプションを開始
+	go subscribeToTopic(ctx, newTopic)
+
+	// 成功レスポンスを返す
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Successfully subscribed to topic: " + topic))
+	w.Write([]byte("Successfully subscribed to topic: " + newTopic))
 }
 
 var upgrader = websocket.Upgrader{
@@ -94,16 +109,38 @@ var upgrader = websocket.Upgrader{
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	log.Println("Attempting to upgrade to WebSocket")
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("Error upgrading to WebSocket: %v", err)
 		return
 	}
-	log.Println("WebSocket connection established")
 	defer conn.Close()
 
-	ctx := r.Context()
+	wsConnMutex.Lock()
+	wsConnections = append(wsConnections, conn)
+	wsConnMutex.Unlock()
+
+	defer func() {
+		wsConnMutex.Lock()
+		for i, c := range wsConnections {
+			if c == conn {
+				wsConnections = append(wsConnections[:i], wsConnections[i+1:]...)
+				break
+			}
+		}
+		wsConnMutex.Unlock()
+	}()
+
+	// WebSocket接続が閉じられるまで待機
+	for {
+		_, _, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+	}
+}
+
+func subscribeToTopic(ctx context.Context, topic string) {
 	client, err := pubsub.NewClient(ctx, ProjectID())
 	if err != nil {
 		log.Printf("Error creating Pub/Sub client: %v", err)
@@ -111,70 +148,48 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer client.Close()
 
-	for {
-		if topic == "" {
-			log.Println("Waiting for topic...")
-			time.Sleep(5 * time.Second)
-			continue
-		}
-		if hasSubscribed {
-			return
-		}
-		break
-	}
-
 	sub := client.Subscription(fmt.Sprintf("debug-%s", topic))
 
-	// メッセージ受信用のチャネル
-	messages := make(chan *pubsub.Message)
+	err = sub.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
+		sendMessageToWebSocket(msg)
+		msg.Ack()
+	})
 
-	// Pub/Subからメッセージを受信するgoroutine
-	go func() {
-		err := sub.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
-			messages <- msg
-			msg.Ack()
-		})
+	if err != nil && err != context.Canceled {
+		log.Printf("Error receiving messages: %v", err)
+	}
+}
+
+func sendMessageToWebSocket(msg *pubsub.Message) {
+	// JSONをインデント
+	var prettyJSON bytes.Buffer
+	err := json.Indent(&prettyJSON, msg.Data, "", "  ")
+	if err != nil {
+		log.Printf("Error indenting JSON: %v", err)
+		return
+	}
+
+	// HTMLエスケープしてXSS攻撃を防ぐ
+	escapedJSON := html.EscapeString(prettyJSON.String())
+	publishTime := msg.PublishTime
+
+	// メッセージをHTMLに整形
+	htmlMessage := fmt.Sprintf(`
+		<div id="messages" hx-swap-oob="beforeend">
+			<div class="bg-white p-4 rounded-md shadow-sm border border-gray-200 overflow-x-auto">
+				<p class="text-xs text-gray-500 mb-2">%s</p>
+				<pre class="text-sm text-gray-800 whitespace-pre-wrap"><code>%s</code></pre>
+			</div>
+		</div>
+	`, publishTime.Format("2006-01-02 15:04:05"), escapedJSON)
+
+	wsConnMutex.Lock()
+	defer wsConnMutex.Unlock()
+
+	for _, conn := range wsConnections {
+		err := conn.WriteMessage(websocket.TextMessage, []byte(htmlMessage))
 		if err != nil {
-			log.Printf("Error receiving messages: %v", err)
-		}
-	}()
-
-	for {
-		select {
-		case msg := <-messages:
-			log.Printf("Received message: %+v", msg)
-
-			// JSONをインデント
-			var prettyJSON bytes.Buffer
-			err := json.Indent(&prettyJSON, msg.Data, "", "  ")
-			if err != nil {
-				log.Printf("Error indenting JSON: %v", err)
-				continue
-			}
-
-			// HTMLエスケープしてXSS攻撃を防ぐ
-			escapedJSON := html.EscapeString(prettyJSON.String())
-			publishTime := msg.PublishTime
-
-			// メッセージをHTMLに整形
-			htmlMessage := fmt.Sprintf(`
-						<div id="messages" hx-swap-oob="beforeend">
-								<div class="bg-white p-4 rounded-md shadow-sm border border-gray-200 overflow-x-auto">
-										<p class="text-xs text-gray-500 mb-2">%s</p>
-										<pre class="text-sm text-gray-800 whitespace-pre-wrap"><code>%s</code></pre>
-								</div>
-						</div>
-				`, publishTime.Format("2006-01-02 15:04:05"), escapedJSON)
-
-			// WebSocketクライアントにメッセージを送信
-			err = conn.WriteMessage(websocket.TextMessage, []byte(htmlMessage))
-			if err != nil {
-				log.Printf("Error sending message to WebSocket: %v", err)
-				return
-			}
-		case <-r.Context().Done():
-			log.Println("WebSocket connection closed")
-			return
+			log.Printf("Error sending message to WebSocket: %v", err)
 		}
 	}
 }
