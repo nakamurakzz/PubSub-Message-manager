@@ -14,14 +14,17 @@ import (
 var templateFS embed.FS
 
 func main() {
+	if len(os.Args) != 2 {
+		log.Fatal("Usage: go run main.go <project_id>")
+	}
+	os.Setenv("PROJECT_ID", os.Args[1])
+
 	router := mux.NewRouter()
 
 	router.HandleFunc("/ws", handleWebSocket)
 
 	// Define routes
-	router.HandleFunc("/", homeHandler)
-	router.HandleFunc("/about", aboutHandler)
-	router.HandleFunc("/contact", contactHandler)
+	router.HandleFunc("/", messageHandler)
 	router.HandleFunc("/subscribe", subscribeHandler).Methods("POST") // Add subscribe route
 
 	// Start the server
@@ -31,4 +34,8 @@ func main() {
 	}
 	fmt.Printf("Server listening on port %s\n", port)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", port), router))
+}
+
+func ProjectID() string {
+	return os.Getenv("PROJECT_ID")
 }

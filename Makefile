@@ -1,4 +1,4 @@
 build:
 	go build -o main .
 run:
-	air
+	air ${project_id}
