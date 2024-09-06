@@ -1,6 +1,6 @@
 .PHONY: build run
 build:
-	go build -o pubusub-subscriber .
+	go build -o cmd/pubusub-subscriber .
 
 .PHONY: run
 run:
