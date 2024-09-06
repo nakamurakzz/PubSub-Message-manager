@@ -14,11 +14,13 @@ import (
 var templateFS embed.FS
 
 func main() {
-	if len(os.Args) >= 2 {
+	if len(os.Args) < 2 {
 		log.Fatal("Usage: ./cmd/pubusub-subscriber <project_id> <port(optional)>")
 	}
+	if len(os.Args) >= 3 {
+		os.Setenv("PORT", os.Args[2])
+	}
 	os.Setenv("PROJECT_ID", os.Args[1])
-	os.Setenv("PORT", os.Args[2])
 	router := mux.NewRouter()
 
 	router.HandleFunc("/ws", handleWebSocket)
