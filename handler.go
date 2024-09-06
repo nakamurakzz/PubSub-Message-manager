@@ -53,19 +53,13 @@ func messageHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		log.Printf("sub.ID(): %s", sub.ID())
-
 		if strings.HasPrefix(sub.ID(), "debug-") {
 			topic := strings.Replace(sub.ID(), "debug-", "", 1)
 			topics = append(topics, topic)
 
 			topicList[topic] = sub.ID()
 		}
-
-		log.Printf("topicList: %+v", topicList)
 	}
-
-	log.Printf("topics: %+v", topics)
 
 	err = tmpl.ExecuteTemplate(w, "index.html", map[string]interface{}{
 		"Topics": topics,
@@ -78,7 +72,6 @@ func messageHandler(w http.ResponseWriter, r *http.Request) {
 
 func subscribeHandler(w http.ResponseWriter, r *http.Request) {
 	newTopic := r.FormValue("topic")
-	log.Printf("New Topic: %s", newTopic)
 
 	subMutex.Lock()
 	defer subMutex.Unlock()
