@@ -14,11 +14,11 @@ import (
 var templateFS embed.FS
 
 func main() {
-	if len(os.Args) != 2 {
-		log.Fatal("Usage: go run main.go <project_id>")
+	if len(os.Args) >= 2 {
+		log.Fatal("Usage: ./cmd/pubusub-subscriber <project_id> <port(optional)>")
 	}
 	os.Setenv("PROJECT_ID", os.Args[1])
-
+	os.Setenv("PORT", os.Args[2])
 	router := mux.NewRouter()
 
 	router.HandleFunc("/ws", handleWebSocket)
@@ -38,4 +38,8 @@ func main() {
 
 func ProjectID() string {
 	return os.Getenv("PROJECT_ID")
+}
+
+func Port() string {
+	return os.Getenv("PORT")
 }

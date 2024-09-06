@@ -26,7 +26,6 @@ var (
 )
 
 func messageHandler(w http.ResponseWriter, r *http.Request) {
-	// Load the template
 	tmpl, err := template.ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -68,7 +67,6 @@ func messageHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("topics: %+v", topics)
 
-	// Render the template
 	err = tmpl.ExecuteTemplate(w, "index.html", map[string]interface{}{
 		"Topics": topics,
 	})
@@ -85,20 +83,16 @@ func subscribeHandler(w http.ResponseWriter, r *http.Request) {
 	subMutex.Lock()
 	defer subMutex.Unlock()
 
-	// 既存のサブスクリプションをキャンセル
 	if subCancel != nil {
 		subCancel()
 		subCancel = nil
 	}
 
-	// 新しいサブスクリプションのためのコンテキストを作成
 	ctx, cancel := context.WithCancel(context.Background())
 	subCancel = cancel
 
-	// 新しいサブスクリプションを開始
 	go subscribeToTopic(ctx, newTopic)
 
-	// 成功レスポンスを返す
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Successfully subscribed to topic: " + newTopic))
 }
@@ -161,7 +155,6 @@ func subscribeToTopic(ctx context.Context, topic string) {
 }
 
 func sendMessageToWebSocket(msg *pubsub.Message) {
-	// JSONをインデント
 	var prettyJSON bytes.Buffer
 	err := json.Indent(&prettyJSON, msg.Data, "", "  ")
 	if err != nil {
@@ -169,11 +162,9 @@ func sendMessageToWebSocket(msg *pubsub.Message) {
 		return
 	}
 
-	// HTMLエスケープしてXSS攻撃を防ぐ
 	escapedJSON := html.EscapeString(prettyJSON.String())
 	publishTime := msg.PublishTime
 
-	// メッセージをHTMLに整形
 	htmlMessage := fmt.Sprintf(`
 		<div id="messages" hx-swap-oob="beforeend">
 			<div class="bg-white p-4 rounded-md shadow-sm border border-gray-200 overflow-x-auto">
